@@ -4,20 +4,38 @@ uniform mat4 cameraMatrix;
 uniform mat4 worldMatrix;
 uniform vec3 realCameraPosition;
 
-float modulo(float a,float b) {
-    float m = floor(a / b) * b;
-    return a - m;
-}
+int MAX_ITERATIONS = 10;
+float POWER = 8.0;
 
-float sdf2(vec3 point) {
-    vec3 sphereCenter = vec3(150, 150, 150);
-    float grid = 300.0;
-    vec3 tmp = vec3(modulo(point.x, grid), modulo(point.y, grid), modulo(point.z, grid));
-    return distance(tmp, sphereCenter) - 40.0;
+// Adapted from https://github.com/benmandrew/Fractal3D/blob/master/Fractal/fragment.shader
+float mandelbulbSDF(vec3 p) {
+	vec3 z = p;
+	float dr = 1.0;
+	float r = 0.0;
+	for (int i = 0; i < MAX_ITERATIONS; i++) {
+		r = length(z);
+		if (r > 10.0) break;
+
+		float theta = acos(z.z / r);
+		float phi = atan(z.y, z.x);
+		dr = pow(r, POWER - 1.0) * POWER * dr + 1.0;
+
+		float zr = pow(r, POWER);
+		theta = theta * POWER;
+		phi = phi * POWER;
+
+		z = zr * vec3(
+			sin(theta) * cos(phi),
+			sin(phi) * sin(theta),
+			cos(theta)
+		);
+		z += p;
+	}
+	return 0.5 * log(r) * r / dr;
 }
 
 float sdf(vec3 point) {
-    return sdf2(point);
+    return mandelbulbSDF(point);
 }
 
 float march(vec3 startPoint, vec3 direction) {
@@ -25,12 +43,17 @@ float march(vec3 startPoint, vec3 direction) {
     vec3 point = startPoint;
     int i = 0;
     int max = 50;
-    while (dist > 0.0001 && i < max) {
+    float minDist = 0.0001;
+    while (dist > minDist && i < max) {
         i++;
         point += dist * direction;
         dist = sdf(point);
+        if (dist > 1.0) break;
     }
-    return 1.0 - (float(i) / float(max));
+    if (dist > 1.0) {
+        return 0.7;
+    }
+    return 1.0 - (float(i) / float(max) * 0.9);
 }
 
 void main() {
@@ -42,7 +65,7 @@ void main() {
     vec3 ray = normalize(worldPos - realCameraPosition);
     float result = march(realCameraPosition, ray);
     result *= result;
-    gl_FragColor = vec4(0.0, result, result / 2.0, 1.0);
+    gl_FragColor = vec4(result, result, result, 1.0);
 
 	#include <colorspace_fragment>
 }

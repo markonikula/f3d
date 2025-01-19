@@ -82,7 +82,7 @@ function init() {
     console.log('Init2');
 
     document.body.appendChild(renderer.domElement);
-    camera.position.set(0, 0, 500);
+    camera.position.set(0, 0, 5);
     //controls.update();
 
     document.body.addEventListener( 'keydown', onKeyDown, false );
