@@ -30,14 +30,9 @@ const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
 const mesh = new THREE.Mesh(geometry, material);
 scene.add(mesh);
 const controls = new OrbitControls(camera, renderer.domElement);
-//const controls = new FlyControls(camera, renderer.domElement);
 const clock = new THREE.Clock();
-
-controls.movementSpeed = 2;
-controls.domElement = renderer.domElement;
-controls.rollSpeed = Math.PI / 24;
-controls.autoForward = false;
-controls.dragToLook = false;
+const realCamera = new THREE.Vector3(0, 0, 5);
+var movableCamera = false;
 
 const auxScene = new AuxScene(
     shaderMap.vsScreen,
@@ -51,39 +46,46 @@ const auxScene = new AuxScene(
 
 function loop() {
     stats.update();
-    //renderer.render(scene, camera);
     const delta = clock.getDelta();
     controls.update( delta );
 
     auxScene.uniforms.cameraMatrix.value = camera.projectionMatrixInverse;
     auxScene.uniforms.worldMatrix.value = camera.matrixWorld;
-    auxScene.uniforms.realCameraPosition.value = camera.position;
+    if (movableCamera) {
+        auxScene.uniforms.realCameraPosition.value = realCamera;
+    } else {
+        auxScene.uniforms.realCameraPosition.value = camera.position;
+    }
     renderer.render(auxScene.scene, auxScene.camera);
-
-    //console.log(camera.matrixWorld.toArray());
-    //console.log(camera.position);
 
     requestAnimationFrame(loop);
 }
 
+const tmp: THREE.Vector3 = new THREE.Vector3();
+
 function onKeyDown(event: any) {
-    switch (event.keyCode) {
-        case 83: // up
-            camera.position.z += 50;
-            break;
-        case 87: // down
-            camera.position.z -= 50;
-            break;
+    var factor = 0;
+    switch (event.key) {
+        case 'q': factor = 0.01; break;
+        case 'w': factor = 0.001; break;
+        case 'e': factor = 0.0001; break;
+        case 'a': factor = -0.01; break;
+        case 's': factor = -0.001; break;
+        case 'd': factor = -0.0001; break;
+        case '1': movableCamera = false; camera.position.copy(realCamera); break;
+        case '2': movableCamera = true; realCamera.copy(camera.position); break;
     }
-    controls.update();
+    camera.getWorldDirection(tmp);
+    tmp.multiplyScalar(factor);
+    realCamera.add(tmp);
+    console.log(realCamera);
 }
 
 function init() {
-    console.log('Init2');
+    console.log('Init');
 
     document.body.appendChild(renderer.domElement);
     camera.position.set(0, 0, 5);
-    //controls.update();
 
     document.body.addEventListener( 'keydown', onKeyDown, false );
 
