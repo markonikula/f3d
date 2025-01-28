@@ -114,24 +114,38 @@ void main() {
     float t = distance(realCameraPosition.xyz, resultPos.xyz);
     vec3 normal = calcNormal(resultPos.xyz, t);
 
+    vec3 lightColor = vec3(1.0, 1.0, 0.8);
     vec3 light = clipToWorld(vec4(100.0, 100.0, -1.0, 1.0));
     vec3 lightToPoint = resultPos.xyz - light;
     vec4 tmp;
     vec4 lightRayResult = march(light, normalize(lightToPoint), tmp);
     bool shadow = distance(resultPos.xyz, lightRayResult.xyz) > 0.01;
 
-    float specular = dot(normal, normalize(light)) * 0.5 + 0.5;
-    float result = 0.1 + 0.9 * pow(specular, 10.0);
-    result = mix(result, pow(1.0 - resultPos.w, 3.0), 0.3);
-    result *= 1.5;
-    result *= (shadow ? 0.5 : 1.0);
-
-    vec3 resultColor = vec3(
-        result * pow(color.x, 10.0) * 1.5 * smoothstep(0.0, 0.2, color.w),
-        result * 
-            mix(pow((1.0 - 0.3 * (smoothstep(0.0, 0.4, color.y))), 2.0), 0.8, pow(color.x, 10.0)),
-        result * pow((1.0 - 0.3 * (smoothstep(0.0, 0.4, color.z))), 2.0)
+    float trap0 = color.x;
+    vec3 finalColors = vec3(
+        0.9 * pow(trap0, 10.0) * 1.5 * smoothstep(0.0, 0.2, color.w),
+        0.95 * mix(pow((1.0 - 0.3 * (smoothstep(0.0, 0.4, color.y))), 2.0), 0.8, pow(trap0, 10.0)),
+        pow((1.0 - 0.28 * (smoothstep(0.0, 0.7, color.z))), 2.0)
     );
-    resultColor = pow(resultColor, vec3(1.5));
-    gl_FragColor = vec4(resultColor, 1.0);
+
+    vec3 ambient = vec3(0.3);
+
+    float specularStrength = 0.5 * pow(trap0, 10.0);
+    float specularFactor = pow(max(dot(normal, normalize(light)), 0.0), 32.0);
+    vec3 specular = shadow ? vec3(0.0) : specularFactor * specularStrength * lightColor;
+
+    float occlusion = 1.0 - smoothstep(0.1, 0.5, resultPos.w);
+    occlusion = pow(occlusion, 3.0);
+    occlusion *= shadow ? 0.5 : 1.0;
+    occlusion *= 1.9;
+
+    float diffuseStrength = 0.3;
+    float diffuseFactor = max(dot(normal, normalize(-light)), 0.0);
+    vec3 diffuse = diffuseFactor * diffuseStrength * lightColor;
+    vec3 final = (ambient + diffuse + specular) * occlusion * finalColors;
+
+    final *= 1.3;
+    final = pow(final, vec3(1.5));
+
+    gl_FragColor = vec4(final, 1.0);
 }
