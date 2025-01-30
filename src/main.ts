@@ -34,6 +34,8 @@ const clock = new THREE.Clock();
 const realCamera = new THREE.Vector3(0, 0, 5);
 var movableCamera = false;
 
+var waterLevel = 0.9;
+
 const auxScene = new AuxScene(
     shaderMap.vsScreen,
     shaderMap.fsScreen,
@@ -41,14 +43,20 @@ const auxScene = new AuxScene(
         cameraMatrix: { value: camera.projectionMatrixInverse },
         worldMatrix: { value: camera.matrixWorld },
         realCameraPosition: { value: camera.position },
+        frame: { value: 0 },
+        waterLevel: { value: waterLevel }
     }
 );
+
+var frame = 0;
 
 function loop() {
     stats.update();
     const delta = clock.getDelta();
     controls.update( delta );
 
+    auxScene.uniforms.frame.value = frame++;
+    auxScene.uniforms.waterLevel.value = waterLevel;
     auxScene.uniforms.cameraMatrix.value = camera.projectionMatrixInverse;
     auxScene.uniforms.worldMatrix.value = camera.matrixWorld;
     if (movableCamera) {
@@ -74,6 +82,8 @@ function onKeyDown(event: any) {
         case 'd': factor = -0.0001; break;
         case '1': movableCamera = false; camera.position.copy(realCamera); break;
         case '2': movableCamera = true; realCamera.copy(camera.position); break;
+        case 'ArrowUp': waterLevel *= 1.001; break;
+        case 'ArrowDown': waterLevel /= 1.001; break;
     }
     camera.getWorldDirection(tmp);
     tmp.multiplyScalar(factor);
