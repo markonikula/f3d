@@ -6,84 +6,159 @@ uniform float waterLevel;
 uniform mat4 cameraMatrix;
 uniform mat4 worldMatrix;
 uniform vec3 realCameraPosition;
-//: Mandelbulb power, default 8.0, 1-20
-uniform float Power;
+//: Planet radius, default 1.0, 0.1-20
+uniform float PlanetRadius;
+//: Noise frequency 1, default 2, 0.1-10
+uniform float NoiseFrequency1;
+//: Noise amplitude 1, default 0.1, 0-0.2
+uniform float NoiseAmplitude1;
 //: Background color, default [0.0, 0.0, 0.0]
 uniform vec3 bgColor;
 //: Light color, default [1.0, 1.0, 0.8]
 uniform vec3 lightColor;
-//: Water color, default [0.3, 0.4, 0.8]
+//: Water color, default [0.1, 0.1, 0.7]
 uniform vec3 waterColor;
+//: Low altitude color, default [0.0, 0.8, 0.1]
+uniform vec3 lowAltitudeColor;
+//: Medium altitude color, default [0.6, 0.3, 0.15]
+uniform vec3 mediumAltitudeColor;
+//: High altitude color, default [0.9, 0.9, 0.9]
+uniform vec3 highAltitudeColor;
+//: Medium altitude threshold, default 0.25, 0-1
+uniform float mediumAltitudeThreshold;
+//: High altitude threshold, default 0.3, 0-1
+uniform float highAltitudeThreshold;
 
 
-int MAX_ITERATIONS = 10;
-float GRADIENT_EPSILON = 0.0001;
-float THRESHOLD_EPSILON = 0.0001;
+// Utilities, copied/adapted from https://www.shadertoy.com/view/4ttSWf
 
-// Adapted from https://github.com/benmandrew/Fractal3D/blob/master/Fractal/fragment.shader
-float mandelbulbSDF(vec3 p, out vec4 color) {
-    vec3 z = p;
-    float dr = 1.0;
-    float r = 0.0;
-    float minL = 10.0;
-    float minX = 10.0;
-    float minY = 10.0;
-    float minZ = 10.0;
-    for (int i = 0; i < MAX_ITERATIONS; i++) {
-        r = length(z);
-        if (r > 2.0) break;
+//==========================================================================================
+// hashes (low quality, do NOT use in production)
+//==========================================================================================
 
-        float theta = acos(z.z / r);
-        float phi = atan(z.y, z.x);
-        dr = pow(r, Power - 1.0) * Power * dr + 1.0;
+float hash1( vec2 p ) {
+    p  = 50.0*fract( p*0.3183099 );
+    return fract( p.x*p.y*(p.x+p.y) );
+}
 
-        float zr = pow(r, Power);
-        theta = theta * Power;
-        phi = phi * Power;
+float hash1( float n ) {
+    return fract( n*17.0*fract( n*0.3183099 ) );
+}
 
-        z = zr * vec3(
-            sin(theta) * cos(phi),
-            sin(phi) * sin(theta),
-            cos(theta)
-        );
-        z += p;
+vec2 hash2( vec2 p )  {
+    const vec2 k = vec2( 0.3183099, 0.3678794 );
+    float n = 111.0*p.x + 113.0*p.y;
+    return fract(n*fract(k*n));
+}
 
-        minL = min(minL, length(z));
-        minX = min(minX, length(vec3(z.x, z.y, 0.0)));
-        minY = min(minY, length(vec3(z.y, z.z, 0.0)));
-        minZ = min(minZ, length(vec3(z.x, z.z, 0.0)));
+//==========================================================================================
+// noises
+//==========================================================================================
+
+// value noise, and its analytical derivatives
+vec4 noised( in vec3 x ) {
+    vec3 p = floor(x);
+    vec3 w = fract(x);
+    #if 1
+    vec3 u = w*w*w*(w*(w*6.0-15.0)+10.0);
+    vec3 du = 30.0*w*w*(w*(w-2.0)+1.0);
+    #else
+    vec3 u = w*w*(3.0-2.0*w);
+    vec3 du = 6.0*w*(1.0-w);
+    #endif
+
+    float n = p.x + 317.0*p.y + 157.0*p.z;
+    
+    float a = hash1(n+0.0);
+    float b = hash1(n+1.0);
+    float c = hash1(n+317.0);
+    float d = hash1(n+318.0);
+    float e = hash1(n+157.0);
+	float f = hash1(n+158.0);
+    float g = hash1(n+474.0);
+    float h = hash1(n+475.0);
+
+    float k0 =   a;
+    float k1 =   b - a;
+    float k2 =   c - a;
+    float k3 =   e - a;
+    float k4 =   a - b - c + d;
+    float k5 =   a - c - e + g;
+    float k6 =   a - b - e + f;
+    float k7 = - a + b + c - d + e - f - g + h;
+
+    return vec4( -1.0+2.0*(k0 + k1*u.x + k2*u.y + k3*u.z + k4*u.x*u.y + k5*u.y*u.z + k6*u.z*u.x + k7*u.x*u.y*u.z), 
+                      2.0* du * vec3( k1 + k4*u.y + k6*u.z + k7*u.y*u.z,
+                                      k2 + k5*u.z + k4*u.x + k7*u.z*u.x,
+                                      k3 + k6*u.x + k5*u.y + k7*u.x*u.y ) );
+}
+
+//==========================================================================================
+// fbm constructions
+//==========================================================================================
+
+const mat3 m3  = mat3( 0.00,  0.80,  0.60,
+                      -0.80,  0.36, -0.48,
+                      -0.60, -0.48,  0.64 );
+const mat3 m3i = mat3( 0.00, -0.80, -0.60,
+                       0.80,  0.36, -0.48,
+                       0.60, -0.48,  0.64 );
+const mat2 m2 = mat2(  0.80,  0.60,
+                      -0.60,  0.80 );
+const mat2 m2i = mat2( 0.80, -0.60,
+                       0.60,  0.80 );
+
+vec4 fbmd( in vec3 x, float t )
+{
+    float f = 2.21; //1.92;
+    float s = 0.5;
+    float a = 0.0;
+    float b = 0.5;
+    vec3  d = vec3(0.0);
+    mat3  m = mat3(1.0,0.0,0.0,
+                   0.0,1.0,0.0,
+                   0.0,0.0,1.0);
+    int max = int(max(5.0, min(10.0, 5.0 / t)));
+    for( int i=0; i<max; i++ )
+    {
+        vec4 n = noised(x);
+        a += b*n.x;          // accumulate values		
+        d += b*m*n.yzw;      // accumulate derivatives
+        b *= s;
+        x = f*m3*x;
+        m = f*m3i*m;
     }
-    color = vec4(minL, minX, minY, minZ);
-    return 0.5 * log(r) * r / dr;
+	return vec4( a, d );
 }
 
-float sdf(vec3 point, out vec4 color) {
-    return mandelbulbSDF(point, color);
+
+// End of utilities ---------------------------
+
+float calculateAltitude(float distToCenter) {
+    return (distToCenter - PlanetRadius) / NoiseAmplitude1;
 }
 
-const float waterOffsetDist = 0.002;
+vec4 sdf(vec3 point, float t) {
+    // First calculate distance to the closest ideal sphere surface point
+    float d = length(point);
 
-float waterSurfaceOffset(vec3 point, int localFrame) {
-    float r = length(point);
-    float theta = acos(point.z / r);
-    float phi = atan(point.y, point.x);
-    float q = waterOffsetDist;
-    float timeF = float(localFrame) / 50.0;
-    float angleF = 50.0;
+    float radius = PlanetRadius;
+    // Then offset that based on the noise
+    vec4 noise = fbmd(point * NoiseFrequency1, t);
+    float noiseOffset = noise.x * NoiseAmplitude1;
+    radius += noiseOffset;
 
-    return 
-        q * sin(theta * angleF + timeF) + 
-        q * sin(phi * angleF + timeF) +
-        q * 0.0423 * sin(theta * angleF * 7.456 + timeF) + 
-        q * 0.03243 * sin(phi * angleF * 9.2214 + timeF);
+    vec3 sphereNormal = normalize(point);
+    float altitude = calculateAltitude(radius);
+
+    if (noiseOffset < 0.0) {
+        return vec4(d - PlanetRadius, sphereNormal);
+    }
+    vec3 normal = normalize(sphereNormal * PlanetRadius + noise.yzw * NoiseAmplitude1);
+    return vec4(d - radius, normal);
 }
 
-float sdfWater(vec3 point, int localFrame) {
-    float offset = waterSurfaceOffset(point, localFrame);
-    return length(point) - (waterLevel + offset);
-}
-
-vec4 march(vec3 startPoint, vec3 direction, out vec4 color, float tOffset, bool water) {
+vec4 march(vec3 startPoint, vec3 direction, float maxT) {
     vec3 point = startPoint;
     float t = 0.0;
     float l = length(point);
@@ -93,26 +168,17 @@ vec4 march(vec3 startPoint, vec3 direction, out vec4 color, float tOffset, bool 
     }
 
     point = startPoint + t * direction;
-    float dist = sdf(point, color);
+    vec4 distD = sdf(point, length(point) - PlanetRadius);
     int i = 0;
     int max = 200;
-    float threshold = THRESHOLD_EPSILON * (t + tOffset);
-    while (dist > threshold && i < max) {
+    while (t < maxT && i < max) {
         i++;
-        t += dist;
+        t += distD.x * 0.25;
         point = startPoint + t * direction;
-        if (water) {
-            dist = sdfWater(point, frame);
-        } else {
-            dist = sdf(point, color);
-        }
-        if (dist > 1.0) break;
-        threshold = THRESHOLD_EPSILON * (t + tOffset);
+        distD = sdf(point, length(point) - PlanetRadius);
     }
-    if (dist > 1.0) {
-        return vec4(0.0, 0.0, 0.0, 0.0);
-    }
-    return vec4(point.xyz, float(i) / float(max));
+
+    return vec4(t, distD.yzw);
 }
 
 vec3 clipToWorld(vec4 clipPos) {
@@ -122,6 +188,7 @@ vec3 clipToWorld(vec4 clipPos) {
 }
 
 // Adapted from https://iquilezles.org/articles/normalsSDF/
+/*
 vec3 calcNormal( in vec3 p, float t ) {
     float h = GRADIENT_EPSILON * t;
     const vec2 k = vec2(1,-1);
@@ -131,118 +198,47 @@ vec3 calcNormal( in vec3 p, float t ) {
                       k.yxy * sdf( p + k.yxy*h, tmpColor ) + 
                       k.xxx * sdf( p + k.xxx*h, tmpColor ) );
 }
+*/
 
-vec3 calcNormalWater( in vec3 p, float t ) {
-    float h = GRADIENT_EPSILON * t;
-    const vec2 k = vec2(1,-1);
-    return normalize( k.xyy * sdfWater( p + k.xyy*h, frame ) + 
-                      k.yyx * sdfWater( p + k.yyx*h, frame ) + 
-                      k.yxy * sdfWater( p + k.yxy*h, frame ) + 
-                      k.xxx * sdfWater( p + k.xxx*h, frame ) );
-}
+const vec3 light = vec3(10.0, 10.0, 10.0);
 
-vec3 getTargetColor(vec4 resultPos, vec4 color, vec3 normal, vec3 normalWater, vec3 light, bool hitsWater) {
-    vec3 lightToPoint = resultPos.xyz - light;
-    vec4 tmp;
-    vec4 lightRayResult = march(light, normalize(lightToPoint), tmp, 0.0, false);
-    bool shadow = distance(resultPos.xyz, lightRayResult.xyz) > 0.01;
-
-    float trap0 = color.x;
-    vec3 finalColors = vec3(
-        0.9 * pow(trap0, 10.0) * 1.5 * smoothstep(0.0, 0.2, color.w),
-        0.95 * mix(pow((1.0 - 0.3 * (smoothstep(0.0, 0.4, color.y))), 2.0), 0.8, pow(trap0, 10.0)),
-        pow((1.0 - 0.28 * (smoothstep(0.0, 0.7, color.z))), 2.0)
+float colorMixFactor(float threshold, float value) {
+    return smoothstep(
+        threshold, // * 0.99, 
+        threshold, // * 1.01, 
+        value
     );
-    if (resultPos.w == 0.0 && hitsWater) {
-      finalColors = waterColor;
-    }
-
-    vec3 ambient = vec3(0.3);
-
-    float specularStrength = 0.5 * pow(trap0, 10.0);
-    float specularFactor = pow(max(dot(normal, normalize(light)), 0.0), 32.0);
-    vec3 specular = shadow ? vec3(0.0) : specularFactor * specularStrength * lightColor;
-
-    float occlusion = 1.0 - smoothstep(0.1, 0.5, resultPos.w);
-    occlusion = pow(occlusion, 3.0);
-    occlusion *= shadow ? 0.5 : 1.0;
-    occlusion *= 1.9;
-
-    float diffuseStrength = 0.3;
-    float diffuseFactor = max(dot(normal, normalize(-light)), 0.0);
-    vec3 diffuse = diffuseFactor * diffuseStrength * lightColor;
-    vec3 final = (ambient + diffuse + specular) * occlusion * finalColors;
-    return clamp(final, 0.0, 1.0);
 }
 
 void main() {
     vec4 clipPos = vec4(uvPos.x - 0.5, uvPos.y - 0.5, 1.0, 1.0);
-    vec4 color;
     vec3 worldPos = clipToWorld(clipPos);
+
     vec3 ray = normalize(worldPos - realCameraPosition);
-    vec4 resultPosWater = march(realCameraPosition, ray, color, 0.0, true);
-    vec4 resultPos = march(realCameraPosition, ray, color, 0.0, false);
-
-    float t = distance(realCameraPosition.xyz, resultPos.xyz);
-    float tWater = resultPosWater.w == 0.0 ? 100.0 : distance(realCameraPosition.xyz, resultPosWater.xyz);
-    bool hitsWater = tWater < t;
-    vec3 normalWater = calcNormalWater(resultPosWater.xyz, tWater);
-    vec4 resultPosReflection = vec4(0.0);
-    vec3 reflectedColor = vec3(0.0);
-    float reflectionStrength = 0.0;
-
-    vec3 light = clipToWorld(vec4(100.0, 100.0, -1.0, 1.0));
-    bool waterInShadow = true;
-    float foam = 0.0;
-
-    if (hitsWater) {
-        vec3 reflectedRay = normalize(reflect(ray, normalWater));
-        resultPosReflection = march(resultPosWater.xyz, reflectedRay, color, t, false);
-        if (resultPosReflection.w != 0.0) {
-          float tReflection = distance(resultPosWater.xyz, resultPosReflection.xyz);
-          vec3 resultPosReflectionNormal = calcNormal(resultPosReflection.xyz, t + tReflection);
-          reflectedColor = getTargetColor(resultPosReflection, color, resultPosReflectionNormal, vec3(0.0), light, false);
-        } else {
-          reflectedColor = bgColor;
-        }
-        reflectionStrength = 1.0 - pow(abs(dot(ray, normalWater)), 0.5);
-
-        vec3 lightToWaterSurface = resultPosWater.xyz - light;
-        vec4 tmp;
-        vec4 waterSurfaceLightRayResultA = march(light, normalize(lightToWaterSurface), tmp, 0.0, false);
-        vec4 waterSurfaceLightRayResultB = march(light, normalize(lightToWaterSurface), tmp, 0.0, true);
-        float tA = distance(light, waterSurfaceLightRayResultA.xyz);
-        float tB = distance(light, waterSurfaceLightRayResultB.xyz);
-        waterInShadow = tA < tB;
-
-        ray = refract(ray, normalWater, 3.0 / 3.5);
-        resultPos = march(resultPosWater.xyz, ray, color, t, false);
-    } else {
-        float waterDistMomentAgo = sdfWater(resultPos.xyz, frame - 50);
-        foam = 1.0 - clamp(waterDistMomentAgo / (waterOffsetDist * 0.5), 0.0, 1.0);
-    }
-
-    vec3 normal = calcNormal(resultPos.xyz, t);
-    float waterDepth = max(0.0, t - tWater);
-    if (resultPos.w == 0.0 && !hitsWater) {
+    float maxT = 100.0;
+    vec4 result = march(realCameraPosition, ray, maxT);
+    float t = result.x;
+    if (t >= maxT) {
         gl_FragColor = vec4(bgColor, 1.0);
         return;
     }
 
-    float ambientWater = hitsWater ? 0.3 : 0.0;
-    float specularWater = hitsWater && !waterInShadow
-        ? pow(max(dot(normalWater, normalize(light)), 0.0), 64.0) * 0.8
-        : 0.0;
+    vec3 normal = result.yzw;
+    float shade = dot(normal, normalize(light)) * 0.5 + 0.5;
 
-    vec3 final = getTargetColor(resultPos, color, normal, normalWater, light, hitsWater);
+    vec3 resultPos = realCameraPosition + t * ray;
+    float altitude = calculateAltitude(length(resultPos));
+    vec3 color = waterColor;
 
-    final = mix(final, final * 0.5, clamp(waterDepth / 0.4, 0.0, 1.0));
-    final = mix(final, waterColor, ambientWater);
-    final = mix(final, reflectedColor, reflectionStrength * 0.5);
-    final = mix(final, clamp(final * 7.0, 0.0, 1.0), foam * 0.35);
-    final = mix(final, lightColor, specularWater);
+    if (altitude > 0.0001) {
+        float mediumAltitudeFactor = colorMixFactor(mediumAltitudeThreshold, altitude);
+        color = mix(lowAltitudeColor, mediumAltitudeColor, mediumAltitudeFactor);
+        float highAltitudeFactor = colorMixFactor(highAltitudeThreshold, altitude);
+        color = mix(color, highAltitudeColor, highAltitudeFactor);
+    }
 
-    final *= 1.3;
+    vec3 final = color * shade;
+
     final = pow(final, vec3(1.5));
 
     gl_FragColor = vec4(final, 1.0);
