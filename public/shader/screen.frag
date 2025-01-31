@@ -53,11 +53,29 @@ float sdf(vec3 point, out vec4 color) {
     return mandelbulbSDF(point, color);
 }
 
-float sdfWater(vec3 point) {
-    return length(point) - waterLevel;
+const float waterOffsetDist = 0.002;
+
+float waterSurfaceOffset(vec3 point, int localFrame) {
+    float r = length(point);
+    float theta = acos(point.z / r);
+    float phi = atan(point.y, point.x);
+    float q = waterOffsetDist;
+    float timeF = float(localFrame) / 50.0;
+    float angleF = 50.0;
+
+    return 
+        q * sin(theta * angleF + timeF) + 
+        q * sin(phi * angleF + timeF) +
+        q * 0.0423 * sin(theta * angleF * 7.456 + timeF) + 
+        q * 0.03243 * sin(phi * angleF * 9.2214 + timeF);
 }
 
-vec4 march(vec3 startPoint, vec3 direction, out vec4 color, bool water) {
+float sdfWater(vec3 point, int localFrame) {
+    float offset = waterSurfaceOffset(point, localFrame);
+    return length(point) - (waterLevel + offset);
+}
+
+vec4 march(vec3 startPoint, vec3 direction, out vec4 color, float tOffset, bool water) {
     vec3 point = startPoint;
     float t = 0.0;
     float l = length(point);
@@ -70,18 +88,18 @@ vec4 march(vec3 startPoint, vec3 direction, out vec4 color, bool water) {
     float dist = sdf(point, color);
     int i = 0;
     int max = 200;
-    float threshold = THRESHOLD_EPSILON * t;
+    float threshold = THRESHOLD_EPSILON * (t + tOffset);
     while (dist > threshold && i < max) {
         i++;
         t += dist;
         point = startPoint + t * direction;
         if (water) {
-            dist = sdfWater(point);
+            dist = sdfWater(point, frame);
         } else {
             dist = sdf(point, color);
         }
         if (dist > 1.0) break;
-        threshold = THRESHOLD_EPSILON * t;
+        threshold = THRESHOLD_EPSILON * (t + tOffset);
     }
     if (dist > 1.0) {
         return vec4(0.0, 0.0, 0.0, 0.0);
@@ -106,37 +124,22 @@ vec3 calcNormal( in vec3 p, float t ) {
                       k.xxx * sdf( p + k.xxx*h, tmpColor ) );
 }
 
-void main() {
-    vec4 clipPos = vec4(uvPos.x - 0.5, uvPos.y - 0.5, 1.0, 1.0);
-    vec3 bgColor = vec3(0.0);
-    vec4 color;
-    vec3 worldPos = clipToWorld(clipPos);
-    vec3 ray = normalize(worldPos - realCameraPosition);
-    vec4 resultPosWater = march(realCameraPosition, ray, color, true);
-    vec4 resultPos = march(realCameraPosition, ray, color, false);
+vec3 calcNormalWater( in vec3 p, float t ) {
+    float h = GRADIENT_EPSILON * t;
+    const vec2 k = vec2(1,-1);
+    return normalize( k.xyy * sdfWater( p + k.xyy*h, frame ) + 
+                      k.yyx * sdfWater( p + k.yyx*h, frame ) + 
+                      k.yxy * sdfWater( p + k.yxy*h, frame ) + 
+                      k.xxx * sdfWater( p + k.xxx*h, frame ) );
+}
 
-    float t = distance(realCameraPosition.xyz, resultPos.xyz);
-    float tWater = resultPosWater.w == 0.0 ? 100.0 : distance(realCameraPosition.xyz, resultPosWater.xyz);
-    bool hitsWater = tWater < t;
-    vec3 normalWater = normalize(resultPosWater.xyz);  // Normal of a sphere surface at the hit point
+const vec3 lightColor = vec3(1.0, 1.0, 0.8);
+const vec3 waterColor = vec3(0.3, 0.4, 0.8);
 
-    if (hitsWater) {
-        ray = refract(ray, normalWater, 3.0 / 4.0);
-        resultPos = march(resultPosWater.xyz, ray, color, false);
-    }
-
-    vec3 normal = calcNormal(resultPos.xyz, t);
-    float waterDepth = max(0.0, t - tWater);
-    if (resultPos.w == 0.0 && !hitsWater) {
-        gl_FragColor = vec4(bgColor, 1.0);
-        return;
-    }
-
-    vec3 lightColor = vec3(1.0, 1.0, 0.8);
-    vec3 light = clipToWorld(vec4(100.0, 100.0, -1.0, 1.0));
+vec3 getTargetColor(vec4 resultPos, vec4 color, vec3 normal, vec3 normalWater, vec3 light, bool hitsWater) {
     vec3 lightToPoint = resultPos.xyz - light;
     vec4 tmp;
-    vec4 lightRayResult = march(light, normalize(lightToPoint), tmp, false);
+    vec4 lightRayResult = march(light, normalize(lightToPoint), tmp, 0.0, false);
     bool shadow = distance(resultPos.xyz, lightRayResult.xyz) > 0.01;
 
     float trap0 = color.x;
@@ -150,16 +153,10 @@ void main() {
     }
 
     vec3 ambient = vec3(0.3);
-    float ambientWater = hitsWater ? 0.5 : 0.0;
 
     float specularStrength = 0.5 * pow(trap0, 10.0);
     float specularFactor = pow(max(dot(normal, normalize(light)), 0.0), 32.0);
     vec3 specular = shadow ? vec3(0.0) : specularFactor * specularStrength * lightColor;
-
-    vec3 waterColor = vec3(0.3, 0.7, 0.6);
-    float specularWater = hitsWater
-        ? pow(max(dot(normalWater, normalize(light)), 0.0), 32.0) * 0.5
-        : 0.0;
 
     float occlusion = 1.0 - smoothstep(0.1, 0.5, resultPos.w);
     occlusion = pow(occlusion, 3.0);
@@ -170,8 +167,75 @@ void main() {
     float diffuseFactor = max(dot(normal, normalize(-light)), 0.0);
     vec3 diffuse = diffuseFactor * diffuseStrength * lightColor;
     vec3 final = (ambient + diffuse + specular) * occlusion * finalColors;
-    final = mix(final, vec3(0.0, 0.0, 0.5), clamp(waterDepth / 0.2, 0.0, 1.0));
+    return clamp(final, 0.0, 1.0);
+}
+
+void main() {
+    vec4 clipPos = vec4(uvPos.x - 0.5, uvPos.y - 0.5, 1.0, 1.0);
+    vec3 bgColor = vec3(0.0);
+    vec4 color;
+    vec3 worldPos = clipToWorld(clipPos);
+    vec3 ray = normalize(worldPos - realCameraPosition);
+    vec4 resultPosWater = march(realCameraPosition, ray, color, 0.0, true);
+    vec4 resultPos = march(realCameraPosition, ray, color, 0.0, false);
+
+    float t = distance(realCameraPosition.xyz, resultPos.xyz);
+    float tWater = resultPosWater.w == 0.0 ? 100.0 : distance(realCameraPosition.xyz, resultPosWater.xyz);
+    bool hitsWater = tWater < t;
+    vec3 normalWater = calcNormalWater(resultPosWater.xyz, tWater);
+    vec4 resultPosReflection = vec4(0.0);
+    vec3 reflectedColor = vec3(0.0);
+    float reflectionStrength = 0.0;
+
+    vec3 light = clipToWorld(vec4(100.0, 100.0, -1.0, 1.0));
+    bool waterInShadow = true;
+    float foam = 0.0;
+
+    if (hitsWater) {
+        vec3 reflectedRay = normalize(reflect(ray, normalWater));
+        resultPosReflection = march(resultPosWater.xyz, reflectedRay, color, t, false);
+        if (resultPosReflection.w != 0.0) {
+          float tReflection = distance(resultPosWater.xyz, resultPosReflection.xyz);
+          vec3 resultPosReflectionNormal = calcNormal(resultPosReflection.xyz, t + tReflection);
+          reflectedColor = getTargetColor(resultPosReflection, color, resultPosReflectionNormal, vec3(0.0), light, false);
+        } else {
+          reflectedColor = bgColor;
+        }
+        reflectionStrength = 1.0 - pow(abs(dot(ray, normalWater)), 0.5);
+
+        vec3 lightToWaterSurface = resultPosWater.xyz - light;
+        vec4 tmp;
+        vec4 waterSurfaceLightRayResultA = march(light, normalize(lightToWaterSurface), tmp, 0.0, false);
+        vec4 waterSurfaceLightRayResultB = march(light, normalize(lightToWaterSurface), tmp, 0.0, true);
+        float tA = distance(light, waterSurfaceLightRayResultA.xyz);
+        float tB = distance(light, waterSurfaceLightRayResultB.xyz);
+        waterInShadow = tA < tB;
+
+        ray = refract(ray, normalWater, 3.0 / 3.5);
+        resultPos = march(resultPosWater.xyz, ray, color, t, false);
+    } else {
+        float waterDistMomentAgo = sdfWater(resultPos.xyz, frame - 50);
+        foam = 1.0 - clamp(waterDistMomentAgo / (waterOffsetDist * 0.5), 0.0, 1.0);
+    }
+
+    vec3 normal = calcNormal(resultPos.xyz, t);
+    float waterDepth = max(0.0, t - tWater);
+    if (resultPos.w == 0.0 && !hitsWater) {
+        gl_FragColor = vec4(bgColor, 1.0);
+        return;
+    }
+
+    float ambientWater = hitsWater ? 0.3 : 0.0;
+    float specularWater = hitsWater && !waterInShadow
+        ? pow(max(dot(normalWater, normalize(light)), 0.0), 64.0) * 0.8
+        : 0.0;
+
+    vec3 final = getTargetColor(resultPos, color, normal, normalWater, light, hitsWater);
+
+    final = mix(final, final * 0.5, clamp(waterDepth / 0.4, 0.0, 1.0));
     final = mix(final, waterColor, ambientWater);
+    final = mix(final, reflectedColor, reflectionStrength * 0.5);
+    final = mix(final, clamp(final * 7.0, 0.0, 1.0), foam * 0.35);
     final = mix(final, lightColor, specularWater);
 
     final *= 1.3;
