@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 
-async function loadShaderMap<T>(shaderFiles: T): Promise<T> {
+interface ShaderMap {
+    [key: string]: string
+}
+
+async function loadShaderMap<T extends ShaderMap>(shaderFiles: T): Promise<T> {
     const loader = new THREE.FileLoader();
-    const shaderMap = {};
-    const includes = {};
+    const shaderMap: ShaderMap = {};
+    const includes: ShaderMap = {};
     for (const [name, filename] of Object.entries(shaderFiles)) {
         var data = await loader.loadAsync(`/public/shader/${filename}`) as string;
         // Strip the version definition - we want to have it there for the GLSL
@@ -24,7 +28,7 @@ async function loadShaderMap<T>(shaderFiles: T): Promise<T> {
     return shaderMap as T;
 }
 
-function findIncludedFilenames(str) {
+function findIncludedFilenames(str: string) {
     return [...str.matchAll(/^#include <(.*)>$/gm)]
         .map(match => match[1]);
 }
