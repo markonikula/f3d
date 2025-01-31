@@ -6,9 +6,17 @@ uniform float waterLevel;
 uniform mat4 cameraMatrix;
 uniform mat4 worldMatrix;
 uniform vec3 realCameraPosition;
+//: Mandelbulb power, default 8.0, 1-20
+uniform float Power;
+//: Background color, default [0.0, 0.0, 0.0]
+uniform vec3 bgColor;
+//: Light color, default [1.0, 1.0, 0.8]
+uniform vec3 lightColor;
+//: Water color, default [0.3, 0.4, 0.8]
+uniform vec3 waterColor;
+
 
 int MAX_ITERATIONS = 10;
-float POWER = 8.0;
 float GRADIENT_EPSILON = 0.0001;
 float THRESHOLD_EPSILON = 0.0001;
 
@@ -27,11 +35,11 @@ float mandelbulbSDF(vec3 p, out vec4 color) {
 
         float theta = acos(z.z / r);
         float phi = atan(z.y, z.x);
-        dr = pow(r, POWER - 1.0) * POWER * dr + 1.0;
+        dr = pow(r, Power - 1.0) * Power * dr + 1.0;
 
-        float zr = pow(r, POWER);
-        theta = theta * POWER;
-        phi = phi * POWER;
+        float zr = pow(r, Power);
+        theta = theta * Power;
+        phi = phi * Power;
 
         z = zr * vec3(
             sin(theta) * cos(phi),
@@ -133,9 +141,6 @@ vec3 calcNormalWater( in vec3 p, float t ) {
                       k.xxx * sdfWater( p + k.xxx*h, frame ) );
 }
 
-const vec3 lightColor = vec3(1.0, 1.0, 0.8);
-const vec3 waterColor = vec3(0.3, 0.4, 0.8);
-
 vec3 getTargetColor(vec4 resultPos, vec4 color, vec3 normal, vec3 normalWater, vec3 light, bool hitsWater) {
     vec3 lightToPoint = resultPos.xyz - light;
     vec4 tmp;
@@ -149,7 +154,7 @@ vec3 getTargetColor(vec4 resultPos, vec4 color, vec3 normal, vec3 normalWater, v
         pow((1.0 - 0.28 * (smoothstep(0.0, 0.7, color.z))), 2.0)
     );
     if (resultPos.w == 0.0 && hitsWater) {
-      finalColors = vec3(0.0, 0.0, 1.0);
+      finalColors = waterColor;
     }
 
     vec3 ambient = vec3(0.3);
@@ -172,7 +177,6 @@ vec3 getTargetColor(vec4 resultPos, vec4 color, vec3 normal, vec3 normalWater, v
 
 void main() {
     vec4 clipPos = vec4(uvPos.x - 0.5, uvPos.y - 0.5, 1.0, 1.0);
-    vec3 bgColor = vec3(0.0);
     vec4 color;
     vec3 worldPos = clipToWorld(clipPos);
     vec3 ray = normalize(worldPos - realCameraPosition);

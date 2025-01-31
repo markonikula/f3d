@@ -23,7 +23,7 @@ const SHADERS = {
     vsScreen: "screen.vert",
     fsScreen: "screen.frag",
 };
-const shaderMap = await loadShaderMap(SHADERS);
+const [shaderMap, gui] = await loadShaderMap(SHADERS);
 
 const geometry = new THREE.BoxGeometry(100, 100, 100);
 const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
@@ -64,6 +64,9 @@ function loop() {
     } else {
         auxScene.uniforms.realCameraPosition.value = camera.position;
     }
+
+    gui.updateParameters(auxScene.uniforms);
+
     renderer.render(auxScene.scene, auxScene.camera);
 
     requestAnimationFrame(loop);
